@@ -48,22 +48,6 @@ Claude Code читает настройки из нескольких уровн
 ```bash
 mkdir -p ~/.claude
 cat > ~/.claude/CLAUDE.md << 'GLOBAL'
-## Работа с файлами
-
-Перед чтением любого файла — сначала узнать размер:
-  wc -l <file>
-
-Если файл >500 строк — читать структуру, не весь файл:
-  # Python
-  grep -n "^def \|^class \|^@" <file>
-  # JS/TS
-  grep -n "^function \|^const \|^class \|^export" <file>
-  # Java
-  grep -n "^public \|^private \|^protected \|^class \|^interface" <file>
-
-Затем читать только нужные секции через offset + limit.
-Никогда не читать файл целиком если он >800 строк.
-
 ## Перед переписыванием файла
 
 1. Выписать ВСЕ единицы из старого файла (функции / классы / роуты)
@@ -84,15 +68,16 @@ cat > ~/.claude/CLAUDE.md << 'GLOBAL'
 ## Git-workflow
 
 - Делай атомарные коммиты (одна логическая единица на коммит)
-- Используй Conventional Commits: feat:, fix:, refactor:, docs:, chore:
 - Перед коммитом — всегда проверь что не ломается: run tests / lint
 - Никогда не коммить с --no-verify
+- NEVER add `Co-Authored-By:` lines to commit messages
 
 ## Безопасность
 
-- Никогда не выводи содержимое .env, *_KEY, *_SECRET, *_TOKEN в stdout
 - Никогда не добавляй секреты в git
-- Перед выполнением деструктивных команд (rm -rf, DROP, TRUNCATE) — всегда спрашивай подтверждение
+- Для проверки наличия переменной используй:
+    grep -c "VARIABLE_NAME" .env
+  НЕ выводи содержимое файлов с секретами
 
 ## При компактификации контекста
 
@@ -102,6 +87,9 @@ cat > ~/.claude/CLAUDE.md << 'GLOBAL'
 - Архитектурные решения, принятые в сессии
 - Незавершённые задачи
 GLOBAL
+
+# Примечание: правила которые детерминированно энфорсируются хуками
+# (размер файлов, вывод .env, Conventional Commits) — в CLAUDE.md не дублируются.
 ```
 
 ---
@@ -208,9 +196,13 @@ grep -rn "AI-" src/
 
 ### 5.1. Глобальные хуки (`~/.claude/settings.json`)
 
+Ключевой принцип: **advisory (stderr + exit 0) → enforcing (exit 2, блокирует действие)**.
+Инструкции в CLAUDE.md деприоритизируются в долгих сессиях. Хуки — нет.
+
 ```json
 {
   "model": "sonnet",
+  "alwaysThinkingEnabled": true,
   "env": {
     "MAX_THINKING_TOKENS": "10000",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
@@ -242,7 +234,18 @@ grep -rn "AI-" src/
         "hooks": [
           {
             "type": "command",
-            "command": "osascript -e 'display notification \"Claude ждёт ввода\" with title \"Claude Code\"'"
+            "command": "osascript -e 'display notification \"Claude is waiting for input\" with title \"Claude Code\"'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/todowrite-nudge.sh"
           }
         ]
       }
@@ -254,6 +257,14 @@ grep -rn "AI-" src/
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/check-file-size.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/log-summarizer.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/session-state-tracker.sh"
           }
         ]
       },
@@ -263,6 +274,14 @@ grep -rn "AI-" src/
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/security-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/force-skill-for-side-effects.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/generate-commit-msg.sh"
           }
         ]
       }
@@ -276,6 +295,15 @@ grep -rn "AI-" src/
             "command": "bash ~/.claude/hooks/auto-format.sh"
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/session-state-tracker.sh"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -284,7 +312,7 @@ grep -rn "AI-" src/
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Reminder: после компактификации — проверь что помнишь список измененных файлов и текущий статус задачи.'"
+            "command": "bash ~/.claude/hooks/session-state-tracker.sh"
           }
         ]
       }
@@ -295,47 +323,106 @@ grep -rn "AI-" src/
 
 ### 5.2. Скрипты хуков
 
-**`~/.claude/hooks/check-file-size.sh`** — предупреждение о больших файлах:
+Все хуки используют `jq` для структурного парсинга stdin — не regex по сырому тексту.
+
+**`~/.claude/hooks/check-file-size.sh`** — **блокирует** (`exit 2`) чтение файлов >800 строк если не переданы `offset` и `limit`. Если оба параметра есть — пропускает.
 
 ```bash
 #!/bin/bash
 INPUT=$(cat)
 FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
-if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-  exit 0
-fi
+if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then exit 0; fi
 
 LINES=$(wc -l < "$FILE" 2>/dev/null || echo 0)
+if [ "$LINES" -le 800 ]; then exit 0; fi
 
-if [ "$LINES" -gt 500 ]; then
-  echo "⚠️ WARNING: $FILE has $LINES lines. Consider using grep to find structure first, then read specific sections with offset/limit." >&2
-fi
+OFFSET=$(echo "$INPUT" | jq -r '.tool_input.offset // empty')
+LIMIT=$(echo  "$INPUT" | jq -r '.tool_input.limit  // empty')
 
-exit 0
+if [ -n "$OFFSET" ] && [ -n "$LIMIT" ]; then exit 0; fi
+
+cat >&2 <<EOF
+BLOCKED: file has $LINES lines — reading it whole wastes context.
+
+Map structure first:
+  grep -n '^def \|^class \|^function \|^const \|^export ' $FILE
+
+Then Read with explicit offset and limit for the sections you need.
+EOF
+exit 2
 ```
 
-**`~/.claude/hooks/security-gate.sh`** — блокировка опасных команд:
+**`~/.claude/hooks/security-gate.sh`** — **блокирует** (`exit 2`) реально опасные команды через структурный анализ. Не ломает commit messages со словом "drop".
 
 ```bash
 #!/bin/bash
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+if [ -z "$COMMAND" ]; then exit 0; fi
 
-# Блокировать вывод секретов
-if echo "$COMMAND" | grep -qiE '(cat|echo|print).*\.(env|pem|key)'; then
-  echo "🔒 BLOCKED: потенциальный вывод секретов. Используй grep для проверки наличия ключа, не выводи значение." >&2
-  exit 2
+# 1. Вывод секретных файлов: cat/less/head/tail .env/.pem/.key
+if echo "$COMMAND" | grep -qE '^\s*(cat|less|head|tail)\s'; then
+  if echo "$COMMAND" | grep -qE '\.(env|pem|key|token|secret)(\s|$)'; then
+    echo "BLOCKED: printing secret file. Use grep -c KEY .env instead." >&2
+    exit 2
+  fi
 fi
 
-# Блокировать деструктивные SQL
-if echo "$COMMAND" | grep -qiE '(DROP|TRUNCATE|DELETE FROM) '; then
-  echo "🔒 BLOCKED: деструктивная SQL-операция. Подтверди необходимость." >&2
+# 2. Деструктивный SQL — только через psql/mysql/sqlite3
+FIRST=$(echo "$COMMAND" | awk '{print $1}' | xargs basename 2>/dev/null)
+if echo "$FIRST" | grep -qE '^(psql|mysql|sqlite3)$'; then
+  if echo "$COMMAND" | grep -qiE '\b(DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b'; then
+    echo "BLOCKED: destructive SQL via $FIRST. Ask user for confirmation." >&2
+    exit 2
+  fi
+fi
+
+# 3. curl|sh / wget|sh
+if echo "$COMMAND" | grep -qE '(curl|wget)\s[^|]+\|\s*(bash|sh)\b'; then
+  echo "BLOCKED: pipe-to-shell. Download, inspect, then run explicitly." >&2
   exit 2
 fi
 
 exit 0
 ```
+
+**`~/.claude/hooks/force-skill-for-side-effects.sh`** — **блокирует** команды с побочными эффектами, требуя использовать скиллы:
+
+```bash
+#!/bin/bash
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+NORMALIZED=$(echo "$COMMAND" | sed 's/  */ /g')
+
+# git commit → /commit
+if echo "$NORMALIZED" | grep -qE '^\s*git\s+commit\b'; then
+  echo "BLOCKED: use /commit skill instead." >&2; exit 2
+fi
+
+# git push main/master → /push
+if echo "$NORMALIZED" | grep -qE '^\s*git\s+push\b'; then
+  if echo "$NORMALIZED" | grep -qE '\b(main|master)\b'; then
+    echo "BLOCKED: use /push skill instead." >&2; exit 2
+  fi
+fi
+
+# npm/pip publish → /release
+if echo "$NORMALIZED" | grep -qE '^\s*(npm\s+publish|pip\s+publish|twine\s+upload)\b'; then
+  echo "BLOCKED: use /release skill instead." >&2; exit 2
+fi
+
+# docker push → /deploy
+if echo "$NORMALIZED" | grep -qE '^\s*docker\s+push\b'; then
+  echo "BLOCKED: use /deploy skill instead." >&2; exit 2
+fi
+
+exit 0
+```
+
+**`~/.claude/hooks/session-state-tracker.sh`** — записывает прочитанные файлы в `~/.claude/state/session-<id>-read-files.txt` (PostToolUse Read) и инжектирует список после компактификации (SessionStart compact). Предотвращает повторное чтение уже известных файлов.
+
+**`~/.claude/hooks/todowrite-nudge.sh`** — на каждый UserPromptSubmit проверяет: промпт >200 символов, содержит перечисление (3+ запятых), или ключевые фразы ("реализуй всё", "implement all"). Инжектирует напоминание использовать TodoWrite. Exit 0 всегда — это nudge, не блок.
 
 **`~/.claude/hooks/auto-format.sh`** — автоформатирование после записи:
 
@@ -343,31 +430,24 @@ exit 0
 #!/bin/bash
 INPUT=$(cat)
 FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
-
-if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-  exit 0
-fi
+if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then exit 0; fi
 
 case "$FILE" in
   *.py)
     command -v black >/dev/null 2>&1 && black -q "$FILE" 2>/dev/null
-    command -v ruff >/dev/null 2>&1 && ruff check --fix -q "$FILE" 2>/dev/null
-    ;;
+    command -v ruff  >/dev/null 2>&1 && ruff check --fix -q "$FILE" 2>/dev/null ;;
   *.ts|*.tsx|*.js|*.jsx)
-    command -v prettier >/dev/null 2>&1 && prettier --write "$FILE" 2>/dev/null
-    ;;
+    command -v prettier >/dev/null 2>&1 && prettier --write "$FILE" 2>/dev/null ;;
   *.java)
-    command -v google-java-format >/dev/null 2>&1 && google-java-format -i "$FILE" 2>/dev/null
-    ;;
+    command -v google-java-format >/dev/null 2>&1 && google-java-format -i "$FILE" 2>/dev/null ;;
 esac
-
 exit 0
 ```
 
 Сделайте скрипты исполняемыми:
 
 ```bash
-mkdir -p ~/.claude/hooks
+mkdir -p ~/.claude/hooks ~/.claude/state
 chmod +x ~/.claude/hooks/*.sh
 ```
 
@@ -386,7 +466,7 @@ if [[ "$FILE" == *.log ]] && [ -f "$FILE" ]; then
   LINES=$(wc -l < "$FILE")
   if [ "$LINES" -gt 500 ]; then
     echo "=== LOG SUMMARY (local model, $LINES lines) ==="
-    tail -n 500 "$FILE" | ollama run mistral \
+    tail -n 500 "$FILE" | ollama run gemma3:4b \
       "Summarize these logs concisely: errors, warnings, key events. JSON format." 2>/dev/null
     echo "=== END SUMMARY, original file too large ==="
     exit 2  # блокируем чтение оригинала — Claude получит summary
@@ -396,25 +476,21 @@ fi
 exit 0
 ```
 
-Добавьте в `settings.json`:
+Без Ollama хук молча делает `exit 0` и Claude читает файл напрямую.
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/log-summarizer.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
+### 5.4. Скиллы для команд с побочными эффектами
+
+`force-skill-for-side-effects.sh` блокирует прямые вызовы — но требует чтобы скиллы существовали:
+
 ```
+~/.claude/skills/
+  commit/SKILL.md   ← /commit  — diff → CC-message → approval → git commit
+  push/SKILL.md     ← /push    — branch check → commits → confirm on main → push
+  release/SKILL.md  ← /release — template для npm/pip publish
+  deploy/SKILL.md   ← /deploy  — template для docker push
+```
+
+Скиллы `/release` и `/deploy` — базовые шаблоны, их нужно кастомизировать под конкретный проект.
 
 ---
 
