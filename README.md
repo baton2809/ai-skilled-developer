@@ -37,25 +37,21 @@ A ready-to-use configuration that gives Claude Code context budgeting, **enforci
     └── ai-developer-workflow-guide.md   ← Full lecture guide (RU)
 ```
 
-## Install in 3 steps
+## Install
 
 ```bash
-# 1. Clone
 git clone git@github.com:baton2809/ai-skilled-developer.git
 cd ai-skilled-developer
-
-# 2. Copy to your Claude config directory
-cp CLAUDE.md ~/.claude/CLAUDE.md
-cp settings.json ~/.claude/settings.json
-cp -r hooks ~/.claude/hooks
-cp -r agents ~/.claude/agents
-cp -r skills ~/.claude/skills
-
-# 3. Make hooks executable
-chmod +x ~/.claude/hooks/*.sh
+./install.sh
 ```
 
-That's it. Open Claude Code — the rules and hooks are active immediately.
+`install.sh` creates symlinks for `hooks/`, `skills/`, `agents/` — so `git pull` updates them everywhere automatically. `CLAUDE.md` and `settings.json` are copied (not symlinked) so you can override them locally without touching the repo.
+
+To update later:
+
+```bash
+git pull  # symlinked dirs pick it up immediately
+```
 
 ## What each part does
 
@@ -154,21 +150,28 @@ Skills are invoked with `/skill-name` and enforce a structured workflow with use
 
 ## Per-project setup
 
-Each project should have its own `.claude/` directory with two files:
+### New project
 
 ```bash
-# Copy the template into your project
-cp -r templates/project/.claude /path/to/your/project/.claude
+# 1. Copy the template
+cp -r /path/to/ai-skilled-developer/templates/project/.claude ./
+cat templates/project/.gitignore >> .gitignore   # keep MEMORY.md out of git
+
+# 2. Fill in .claude/CLAUDE.md — stack, conventions, danger zone
+# 3. Extend .claude/settings.json — add stack-specific permissions
+# 4. Open Claude Code → /memory-update
 ```
 
-Then fill in `.claude/CLAUDE.md` with project-specific context:
+### `.claude/CLAUDE.md` — project context
+
+Fill once, update rarely. Claude reads this instead of scanning thousands of lines of code:
 
 ```markdown
 # Project: GEOLayer
 
 ## Stack
 - Backend: Spring Boot 3 / Java 21
-- DB: PostgreSQL 16 (kopecks for all monetary amounts)
+- DB: PostgreSQL 16
 - Infra: Docker Compose
 
 ## Key commands
@@ -184,7 +187,25 @@ tariff  — subscription plan with pricing tiers
 Ask before any DELETE/TRUNCATE — payments table has live transactions
 ```
 
-And update `.claude/MEMORY.md` at the start of each session via `/memory-update`:
+### `.claude/settings.json` — stack-specific permissions
+
+Extends the global permissions. Add what your stack needs:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn *)",
+      "Bash(make *)",
+      "Bash(docker compose *)"
+    ]
+  }
+}
+```
+
+### `.claude/MEMORY.md` — session state
+
+Updated via `/memory-update`. Never committed (added to `.gitignore` by the template):
 
 ```markdown
 ## current state
@@ -203,7 +224,7 @@ no direct DB access from controllers (compliance audit requirement)
 add TrialExpiredEvent handler in NotificationService
 ```
 
-**Why this matters:** Claude without `MEMORY.md` starts cold every session. 15 minutes updating it at the start is cheaper than re-explaining the domain from scratch.
+Claude without `MEMORY.md` starts cold every session. 15 minutes at the start beats re-explaining the domain from scratch.
 
 ## Requirements
 
