@@ -88,10 +88,6 @@
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/force-skill-for-side-effects.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/generate-commit-msg.sh"
           }
         ]
       }

@@ -278,10 +278,6 @@ grep -rn "AI-" src/
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/force-skill-for-side-effects.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/generate-commit-msg.sh"
           }
         ]
       }
@@ -466,7 +462,7 @@ if [[ "$FILE" == *.log ]] && [ -f "$FILE" ]; then
   LINES=$(wc -l < "$FILE")
   if [ "$LINES" -gt 500 ]; then
     echo "=== LOG SUMMARY (local model, $LINES lines) ==="
-    tail -n 500 "$FILE" | ollama run gemma3:4b \
+    tail -n 500 "$FILE" | ollama run qwen2.5-coder:14b \
       "Summarize these logs concisely: errors, warnings, key events. JSON format." 2>/dev/null
     echo "=== END SUMMARY, original file too large ==="
     exit 2  # блокируем чтение оригинала — Claude получит summary
@@ -660,10 +656,10 @@ Claude запустит три отдельных контекста и верн
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Скачать модель с поддержкой tool-calling
-ollama pull glm-4.7-flash    # 30B MoE, 3B активных, 128K контекст
+ollama pull qwen2.5-coder:14b    # 30B MoE, 3B активных, 128K контекст
 
 # Запустить Claude Code через Ollama
-ollama launch claude --model glm-4.7-flash
+ollama launch claude --model qwen2.5-coder:14b
 ```
 
 Или через переменные окружения:
@@ -673,17 +669,16 @@ export ANTHROPIC_AUTH_TOKEN=ollama
 export ANTHROPIC_API_KEY=""
 export ANTHROPIC_BASE_URL=http://localhost:11434
 
-claude --model glm-4.7-flash
+claude --model qwen2.5-coder:14b
 ```
 
 **Рекомендация по моделям** (Mac M3 Max Pro, 36GB RAM):
 
 | Модель | Размер | Для чего |
 |--------|--------|----------|
-| `glm-4.7-flash` | 30B MoE (3B active) | Основная работа через Claude Code, tool-calling |
+| `qwen2.5-coder:14b` | 30B MoE (3B active) | Основная работа через Claude Code, tool-calling |
 | `deepseek-r1:32b` | 32B | Сложное рассуждение |
-| `qwen2.5-coder:14b` | 14B | Быстрые задачи кодирования |
-| `mistral` | 7B | Суммаризация логов в хуках (быстро, мало ресурсов) |
+| `qwen2.5-coder:14b` | 14B | Кодирование + суммаризация логов в хуках |
 
 ### 8.2. Гибридный режим: Claude API + Ollama для хуков
 
@@ -694,12 +689,10 @@ Claude Code (Anthropic API)
   ├── Пишет код
   ├── Планирует
   └── Хуки вызывают Ollama:
-        ├── Суммаризация логов (mistral)
-        ├── Pre-commit message generation
-        └── Анализ diff перед коммитом
+        └── Суммаризация логов (qwen2.5-coder:14b)
 ```
 
-**`~/.claude/hooks/generate-commit-msg.sh`** — генерация commit message:
+**`~/.claude/hooks/generate-commit-msg.sh`** — генерация commit message *(удалён из конфига: `force-skill-for-side-effects.sh` блокирует `git commit` через `exit 2` раньше, чем этот хук успевает сработать — мёртвый код)*:
 
 ```bash
 #!/bin/bash
@@ -710,7 +703,7 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if echo "$COMMAND" | grep -q "git commit"; then
   DIFF=$(git diff --cached --stat 2>/dev/null)
   if [ -n "$DIFF" ]; then
-    SUGGESTED=$(echo "$DIFF" | ollama run mistral \
+    SUGGESTED=$(echo "$DIFF" | ollama run qwen2.5-coder:14b \
       "Generate a conventional commit message (feat/fix/refactor/docs/chore) for this diff. One line, max 72 chars. Only the message, nothing else." 2>/dev/null)
     echo "💡 Suggested commit message: $SUGGESTED"
   fi

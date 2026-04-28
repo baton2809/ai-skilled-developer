@@ -16,23 +16,24 @@ A ready-to-use configuration that gives Claude Code context budgeting, **enforci
 │   ├── auto-format.sh                  ← Runs black/ruff/prettier after every write
 │   ├── session-state-tracker.sh        ← Tracks read files per session, injects after compaction [advanced]
 │   ├── todowrite-nudge.sh              ← Nudges TodoWrite on multi-step prompts [optional]
-│   ├── generate-commit-msg.sh          ← Suggests commit message via Ollama [optional, requires Ollama]
 │   └── log-summarizer.sh               ← Summarizes large .log files via Ollama [optional, requires Ollama]
 ├── skills/
 │   ├── commit/SKILL.md        ← /commit       — staged diff → Conventional Commits message → approval
 │   ├── push/SKILL.md          ← /push         — branch check → show commits → confirm on main/master
 │   ├── code-review/SKILL.md   ← /code-review  — run reviewer agent on current git diff
-│   ├── memory-update/SKILL.md ← /memory-update — update MEMORY.md in project root
-│   ├── release/SKILL.md       ← /release — template for npm/pip publish workflow
-│   └── deploy/SKILL.md        ← /deploy  — template for docker push workflow
+│   └── memory-update/SKILL.md ← /memory-update — update MEMORY.md in project root
 ├── agents/
 │   ├── planner.md        ← Opus-powered architect: plan only, no code
 │   ├── reviewer.md       ← Sonnet-powered reviewer: Critical/Warning/Info report
 │   └── log-summarizer.md ← Summarizes docker logs / .log files via local Ollama
 ├── templates/
 │   └── project/.claude/
-│       ├── CLAUDE.md  ← Per-project context template (stack, conventions, danger zone)
-│       └── MEMORY.md  ← Per-project session state template
+│       ├── CLAUDE.md          ← Per-project context template (stack, conventions, danger zone)
+│       ├── MEMORY.md          ← Per-project session state template
+│       ├── settings.json      ← Stack-specific permissions (make, docker, etc.)
+│       └── skills/
+│           ├── deploy/SKILL.md  ← /deploy  — docker push template (customize per project)
+│           └── release/SKILL.md ← /release — npm/pip publish template (customize per project)
 └── guide/
     └── ai-developer-workflow-guide.md   ← Full lecture guide (RU)
 ```
@@ -74,7 +75,7 @@ Rules that are enforced by hooks (file size limits, secret printing, Conventiona
 | `Stop` | Claude finishes a task | macOS notification via `osascript` |
 | `UserPromptSubmit` | Every user message | `todowrite-nudge.sh` — nudge on multi-step prompts |
 | `PreToolUse: Read` | Before reading any file | `check-file-size.sh` + `log-summarizer.sh` + `session-state-tracker.sh` |
-| `PreToolUse: Bash` | Before any shell command | `security-gate.sh` + `force-skill-for-side-effects.sh` + `generate-commit-msg.sh` |
+| `PreToolUse: Bash` | Before any shell command | `security-gate.sh` + `force-skill-for-side-effects.sh` |
 | `PostToolUse: Write/Edit` | After writing a file | `auto-format.sh` |
 | `PostToolUse: Read` | After reading any file | `session-state-tracker.sh` — records file to session log |
 | `SessionStart: compact` | After context compaction | `session-state-tracker.sh` — injects list of already-read files |
@@ -108,8 +109,6 @@ Does **not** block: git commit messages containing "drop", grep patterns, arbitr
 
 **`todowrite-nudge.sh`** *(optional)* — injects a reminder to use TodoWrite when a prompt is long (>200 chars), contains multiple items, or uses phrases like "implement all" / "finish everything". Always exits 0 — nudge only, never blocks.
 
-**`generate-commit-msg.sh`** *(optional, requires Ollama)* — suggests a commit message via `ollama run qwen2.5-coder:14b` when Claude runs `git commit`. Silently skips if Ollama is not running.
-
 **`log-summarizer.sh`** *(optional, requires Ollama)* — if a `.log` file exceeds 500 lines, runs `ollama run qwen2.5-coder:14b` to produce a compact summary and blocks the raw read (`exit 2`). Without Ollama the hook exits 0 and Claude reads the file normally.
 
 ### Skills
@@ -124,7 +123,7 @@ Skills are invoked with `/skill-name` and enforce a structured workflow with use
 
 **`/memory-update`** — creates or updates `MEMORY.md` in the project root with current branch, in-progress work, decisions, constraints, and next step. Use at session start and after context compaction.
 
-**`/release`** and **`/deploy`** — base templates. Customize for your registry and pipeline.
+**`/release`** and **`/deploy`** — project-specific templates (not global). Copy from `templates/project/.claude/skills/` into your project's `.claude/skills/` and fill in the steps for your stack.
 
 ### Agents
 
@@ -232,7 +231,7 @@ Claude without `MEMORY.md` starts cold every session. 15 minutes at the start be
 - macOS (for `osascript` notifications — edit or remove that hook on Linux)
 - `jq` — used by all hook scripts (`brew install jq`)
 - Optional: `black`, `ruff`, `prettier` for auto-formatting
-- Optional: [Ollama](https://ollama.com) + `qwen2.5-coder:14b` for log summarization and commit message suggestions
+- Optional: [Ollama](https://ollama.com) + `qwen2.5-coder:14b` for log summarization (`log-summarizer.sh`)
 
 ## Read more
 

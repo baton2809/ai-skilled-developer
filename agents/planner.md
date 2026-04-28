@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Architectural planning for implementation tasks. Use when you need a numbered step-by-step plan before writing any code.
-model: claude-opus-4-6
+model: claude-opus-4-7
 allowed-tools: Read Grep Glob Bash
 permissionMode: plan
 ---

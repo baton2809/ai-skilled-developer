@@ -1,6 +1,5 @@
 #!/bin/bash
 INPUT=$(cat)
-FILE=$(echo "$INPUT" | jq -r '.tool_result.tool_use_id // empty')
 FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
 if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then

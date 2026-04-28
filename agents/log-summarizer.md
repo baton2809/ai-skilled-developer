@@ -2,6 +2,7 @@
 name: log-summarizer
 description: Read docker logs or a .log file, summarize via local ollama, return a short report on errors and key events. Use when you need to analyze a container log or a large log file.
 model: claude-sonnet-4-6
+allowed-tools: Bash(docker *) Bash(tail *) Bash(wc *)
 ---
 
 # role
