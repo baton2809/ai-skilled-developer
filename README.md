@@ -10,22 +10,29 @@ A ready-to-use configuration that gives Claude Code context budgeting, **enforci
 ├── CLAUDE.md          ← Soft guidance loaded into every Claude session
 ├── settings.json      ← Model, permissions, env vars, and hook wiring
 ├── hooks/
-│   ├── check-file-size.sh           ← BLOCKS reads of files >800 lines without offset+limit
-│   ├── security-gate.sh             ← BLOCKS printing .env / destructive SQL (structural check)
+│   ├── check-file-size.sh              ← BLOCKS reads of files >800 lines without offset+limit
+│   ├── security-gate.sh                ← BLOCKS printing .env / destructive SQL (structural check)
 │   ├── force-skill-for-side-effects.sh ← BLOCKS git commit/push, npm publish without skills
-│   ├── session-state-tracker.sh     ← Tracks read files per session, injects after compaction
-│   ├── todowrite-nudge.sh           ← Nudges TodoWrite on multi-step prompts
-│   ├── auto-format.sh               ← Runs black/ruff/prettier after every write
-│   ├── generate-commit-msg.sh       ← Suggests commit message via Ollama (optional)
-│   └── log-summarizer.sh            ← Summarizes large .log files via Ollama (optional)
+│   ├── auto-format.sh                  ← Runs black/ruff/prettier after every write
+│   ├── session-state-tracker.sh        ← Tracks read files per session, injects after compaction [advanced]
+│   ├── todowrite-nudge.sh              ← Nudges TodoWrite on multi-step prompts [optional]
+│   ├── generate-commit-msg.sh          ← Suggests commit message via Ollama [optional, requires Ollama]
+│   └── log-summarizer.sh               ← Summarizes large .log files via Ollama [optional, requires Ollama]
 ├── skills/
-│   ├── commit/SKILL.md  ← /commit — staged diff → Conventional Commits message → approval
-│   ├── push/SKILL.md    ← /push   — branch check → show commits → confirm on main/master
-│   ├── release/SKILL.md ← /release — template for npm/pip publish workflow
-│   └── deploy/SKILL.md  ← /deploy  — template for docker push workflow
+│   ├── commit/SKILL.md        ← /commit       — staged diff → Conventional Commits message → approval
+│   ├── push/SKILL.md          ← /push         — branch check → show commits → confirm on main/master
+│   ├── code-review/SKILL.md   ← /code-review  — run reviewer agent on current git diff
+│   ├── memory-update/SKILL.md ← /memory-update — update MEMORY.md in project root
+│   ├── release/SKILL.md       ← /release — template for npm/pip publish workflow
+│   └── deploy/SKILL.md        ← /deploy  — template for docker push workflow
 ├── agents/
-│   ├── planner.md     ← Opus-powered architect: plan only, no code
-│   └── reviewer.md    ← Sonnet-powered reviewer: Critical/Warning/Info report
+│   ├── planner.md        ← Opus-powered architect: plan only, no code
+│   ├── reviewer.md       ← Sonnet-powered reviewer: Critical/Warning/Info report
+│   └── log-summarizer.md ← Summarizes docker logs / .log files via local Ollama
+├── templates/
+│   └── project/.claude/
+│       ├── CLAUDE.md  ← Per-project context template (stack, conventions, danger zone)
+│       └── MEMORY.md  ← Per-project session state template
 └── guide/
     └── ai-developer-workflow-guide.md   ← Full lecture guide (RU)
 ```
@@ -68,6 +75,7 @@ Rules that are enforced by hooks (file size limits, secret printing, Conventiona
 | Hook | Trigger | Effect |
 |------|---------|--------|
 | `Notification` | Claude waits for input | macOS notification via `osascript` |
+| `Stop` | Claude finishes a task | macOS notification via `osascript` |
 | `UserPromptSubmit` | Every user message | `todowrite-nudge.sh` — nudge on multi-step prompts |
 | `PreToolUse: Read` | Before reading any file | `check-file-size.sh` + `log-summarizer.sh` + `session-state-tracker.sh` |
 | `PreToolUse: Bash` | Before any shell command | `security-gate.sh` + `force-skill-for-side-effects.sh` + `generate-commit-msg.sh` |
@@ -95,18 +103,18 @@ Does **not** block: git commit messages containing "drop", grep patterns, arbitr
 - `npm publish` / `pip publish` / `twine upload` → use `/release`
 - `docker push` → use `/deploy`
 
-**`session-state-tracker.sh`** — tracks which files Claude has already read in a session (stored in `~/.claude/state/`). After context compaction, injects the list so Claude doesn't re-read unchanged files. State files older than 7 days are cleaned up automatically.
-
-**`todowrite-nudge.sh`** — injects a reminder to use TodoWrite when a prompt is long (>200 chars), contains multiple items, or uses phrases like "implement all" / "finish everything". Always exits 0 — nudge only, never blocks.
-
 **`auto-format.sh`** — runs formatters after every file write (if installed):
 - `.py` → `black` + `ruff --fix`
 - `.ts` / `.tsx` / `.js` / `.jsx` → `prettier`
 - `.java` → `google-java-format`
 
-**`generate-commit-msg.sh`** — suggests a commit message via `ollama run gemma3:4b` when Claude runs `git commit`. Optional: silently skips if Ollama is not running.
+**`session-state-tracker.sh`** *(advanced)* — tracks which files Claude has already read in a session (stored in `~/.claude/state/`). After context compaction, injects the list so Claude doesn't re-read unchanged files. State files older than 7 days are cleaned up automatically.
 
-**`log-summarizer.sh`** — if a `.log` file exceeds 500 lines, runs `ollama run gemma3:4b` to produce a compact summary and blocks the raw read (`exit 2`). Optional: without Ollama the hook exits 0 and Claude reads the file normally.
+**`todowrite-nudge.sh`** *(optional)* — injects a reminder to use TodoWrite when a prompt is long (>200 chars), contains multiple items, or uses phrases like "implement all" / "finish everything". Always exits 0 — nudge only, never blocks.
+
+**`generate-commit-msg.sh`** *(optional, requires Ollama)* — suggests a commit message via `ollama run qwen2.5-coder:14b` when Claude runs `git commit`. Silently skips if Ollama is not running.
+
+**`log-summarizer.sh`** *(optional, requires Ollama)* — if a `.log` file exceeds 500 lines, runs `ollama run qwen2.5-coder:14b` to produce a compact summary and blocks the raw read (`exit 2`). Without Ollama the hook exits 0 and Claude reads the file normally.
 
 ### Skills
 
@@ -115,6 +123,10 @@ Skills are invoked with `/skill-name` and enforce a structured workflow with use
 **`/commit`** — shows staged diff, drafts a Conventional Commits message, asks for approval, then commits. Enforces `feat:` / `fix:` / `refactor:` / `docs:` / `chore:` prefixes and ≤72 char subject line.
 
 **`/push`** — verifies current branch, shows commits to be pushed, requires explicit confirmation before pushing to `main` or `master`.
+
+**`/code-review`** — runs the reviewer agent on `git diff HEAD` and returns a structured Critical / Warning / Info report.
+
+**`/memory-update`** — creates or updates `MEMORY.md` in the project root with current branch, in-progress work, decisions, constraints, and next step. Use at session start and after context compaction.
 
 **`/release`** and **`/deploy`** — base templates. Customize for your registry and pipeline.
 
@@ -128,6 +140,8 @@ Skills are invoked with `/skill-name` and enforce a structured workflow with use
 - **Info** — style notes, minor suggestions
 - **Verdict** — `APPROVE` or `REQUEST CHANGES`
 
+**`log-summarizer`** (Sonnet) — receives a container name or log file path, reads the last 200 lines, summarizes via local Ollama (`qwen2.5-coder:14b`), returns ERRORS / WARNINGS / KEY EVENTS.
+
 **Usage pattern:**
 ```
 "Use the planner agent to plan: add pagination to the API"
@@ -138,36 +152,58 @@ Skills are invoked with `/skill-name` and enforce a structured workflow with use
   -> reviewer returns a structured report
 ```
 
-## Customizing for your project
+## Per-project setup
 
-After installing globally, add a project-level `CLAUDE.md` in your repo root with:
+Each project should have its own `.claude/` directory with two files:
+
+```bash
+# Copy the template into your project
+cp -r templates/project/.claude /path/to/your/project/.claude
+```
+
+Then fill in `.claude/CLAUDE.md` with project-specific context:
 
 ```markdown
-# Project: <name>
+# Project: GEOLayer
 
 ## Stack
-- Backend: FastAPI / Python 3.12
-- DB: PostgreSQL 16
+- Backend: Spring Boot 3 / Java 21
+- DB: PostgreSQL 16 (kopecks for all monetary amounts)
 - Infra: Docker Compose
 
 ## Key commands
-- `make dev` — start in dev mode
-- `make test` — run tests
-- `make lint` — lint
+make dev     # start in dev mode
+make test    # run tests
+make lint    # checkstyle + spotbugs
 
-## Project structure
-src/api/     — FastAPI routers
-src/services/ — business logic
-tests/       — pytest tests
+## Domain vocabulary
+kopecks — monetary amounts stored as Int in DB, returned as rubles in API
+tariff  — subscription plan with pricing tiers
 
-## Conventions
-- All API responses use envelope: {data, error, meta}
-- Logging: structlog, JSON format
+## Danger zone
+Ask before any DELETE/TRUNCATE — payments table has live transactions
 ```
 
-Claude reads this instead of scanning thousands of lines of code.
+And update `.claude/MEMORY.md` at the start of each session via `/memory-update`:
 
-Customize `/release` and `/deploy` skills for your actual registry and pipeline before using them.
+```markdown
+## current state
+branch: feature/trial-flow
+in progress: trial expiry logic in SubscriptionService
+broken: nothing
+
+## active decisions
+CloudPayments over YuKassa — existing contract, already integrated
+
+## constraints
+kopecks in DB always (float precision — learned the hard way)
+no direct DB access from controllers (compliance audit requirement)
+
+## next step
+add TrialExpiredEvent handler in NotificationService
+```
+
+**Why this matters:** Claude without `MEMORY.md` starts cold every session. 15 minutes updating it at the start is cheaper than re-explaining the domain from scratch.
 
 ## Requirements
 
@@ -175,7 +211,7 @@ Customize `/release` and `/deploy` skills for your actual registry and pipeline 
 - macOS (for `osascript` notifications — edit or remove that hook on Linux)
 - `jq` — used by all hook scripts (`brew install jq`)
 - Optional: `black`, `ruff`, `prettier` for auto-formatting
-- Optional: [Ollama](https://ollama.com) + `gemma3:4b` for log summarization and commit message suggestions
+- Optional: [Ollama](https://ollama.com) + `qwen2.5-coder:14b` for log summarization and commit message suggestions
 
 ## Read more
 
